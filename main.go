@@ -11,6 +11,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -110,38 +111,53 @@ func removeNetwork(dockerBin, netName string) error {
 
 func main() {
 	var (
-		err           error
-		dockerBin     = flag.String("docker", "/usr/bin/docker", "The full path to the docker binary")
-		janitorDir    = flag.String("dir", "/opt/image-janitor", "The path to the directory containing job files.")
-		filenameRegex = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$`)
+		dockerBin       = flag.String("docker", "/usr/bin/docker", "The full path to the docker binary")
+		janitorDir      = flag.String("dir", "/opt/image-janitor", "The path to the directory containing job files.")
+		numSleepSeconds = flag.String("sleep", "15s", "The number of seconds to sleep for between checks. Needs to be in the Go Duration format.")
+		filenameRegex   = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$`)
 	)
 	flag.Parse()
 
-	networksFromDocker, err := listnetworks(*dockerBin)
+	sleepDuration, err := time.ParseDuration(*numSleepSeconds)
 	if err != nil {
-		log.Print(err)
-	}
-	networksFromJobs, err := defaultnetworks(*janitorDir, filenameRegex)
-	if err != nil {
-		log.Print(err)
+		log.Fatal(errors.Wrapf(err, "error parsing duration '%s'", *numSleepSeconds))
 	}
 
-	// Only try to prune a job if it was created for a job and that job is no
-	// longer running.
-	for _, dockernet := range networksFromDocker {
-		log.Printf("found docker network %s\n", dockernet)
-		found := false
-		for _, jobnet := range networksFromJobs {
-			if dockernet == jobnet {
-				found = true
-				log.Printf("docker network %s is a job network\n", jobnet)
+	for {
+		networksFromDocker, err := listnetworks(*dockerBin)
+		if err != nil {
+			log.Print(err)
+		}
+		networksFromJobs, err := defaultnetworks(*janitorDir, filenameRegex)
+		if err != nil {
+			log.Print(err)
+		}
+
+		// Only try to prune a job if it was created for a job and that job is no
+		// longer running.
+		for _, dockernet := range networksFromDocker {
+			log.Printf("found docker network %s\n", dockernet)
+			found := false
+			for _, jobnet := range networksFromJobs {
+				if dockernet == jobnet {
+					found = true
+					log.Printf("docker network %s is a job network\n", jobnet)
+				}
+			}
+
+			// TODO: Figure out a way to check if a job is still running locally or
+			// not. road-runner should add the Condor working directory to the job
+			// JSON before it gets copied to the image-janitor directory.
+			// network-pruner can check for the existence of the working directory
+			// and the invocation ID in that job file to see if the job is running.
+			if found {
+				log.Printf("removing docker network %s\n", dockernet)
+				if err = removeNetwork(*dockerBin, dockernet); err != nil {
+					log.Print(err)
+				}
 			}
 		}
-		if found {
-			log.Printf("removing docker network %s\n", dockernet)
-			if err = removeNetwork(*dockerBin, dockernet); err != nil {
-				log.Print(err)
-			}
-		}
+
+		time.Sleep(sleepDuration)
 	}
 }
