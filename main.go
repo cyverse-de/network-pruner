@@ -111,7 +111,7 @@ func removeNetwork(dockerBin, netName string) error {
 // directory. It's compared against the values in a CleanableJob to see if we
 // should remove the networks created by the job.
 type RunningJob struct {
-	InvocationID string `json:"invocation_id"`
+	InvocationID string `json:"uuid"`
 }
 
 // NewRunningJob contains the fields from the job JSON contained in a running
@@ -135,7 +135,7 @@ func NewRunningJob(filepath string) (*RunningJob, error) {
 // CleanableJob contains the fields from the job JSON that network pruner
 // cares about.
 type CleanableJob struct {
-	InvocationID          string `json:"invocation_id"`
+	InvocationID          string `json:"uuid"`
 	LocalWorkingDirectory string `json:"local_working_directory"`
 }
 
@@ -163,6 +163,7 @@ func main() {
 		janitorDir      = flag.String("dir", "/opt/image-janitor", "The path to the directory containing job files.")
 		numSleepSeconds = flag.String("sleep", "15s", "The number of seconds to sleep for between checks. Needs to be in the Go Duration format.")
 		filenameRegex   = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$`)
+		networkRegex    = regexp.MustCompile(`(?i)^[0-9a-f]{32}_default$`)
 	)
 	flag.Parse()
 
@@ -170,54 +171,43 @@ func main() {
 	if err != nil {
 		log.Fatal(errors.Wrapf(err, "error parsing duration '%s'", *numSleepSeconds))
 	}
-	for {
-		var err error
-		var networksFromDocker []string
-		var removableNetworks []string
 
-		// get the job files.
+	for {
+		var (
+			err                error
+			networksFromDocker []string
+			removableNetworks  map[string]bool
+		)
+
+		removableNetworks = make(map[string]bool)
+
+		// Get the full list of docker networks from docker.
+		networksFromDocker, err = listnetworks(*dockerBin)
+		if err != nil {
+			log.Print(err)
+		}
+
+		// By default all docker networks that match the naming convention are
+		// considered removable. They'll be toggled back to false later if they
+		// shouldn't actually be removed.
+		for _, dockernet := range networksFromDocker {
+			if networkRegex.MatchString(dockernet) {
+				log.Printf("adding %s to the list of removable networks", dockernet)
+				removableNetworks[dockernet] = true
+			} else {
+				removableNetworks[dockernet] = false
+			}
+		}
+
+		// Get a listing of the job files in the /opt/image-janitor directory.
 		jobfiles, err := jobfiles(*janitorDir, filenameRegex)
 		if err != nil {
 			log.Print(errors.Wrap(err, "failed to get job files"))
 		}
 
-		// For each job file
+		// Add known default networks to the list of networks that can be removed.
 		for _, jobfile := range jobfiles {
 			var localJob *CleanableJob
-			// parse the job file to get the local_working_directory.
-			localJob, err = NewCleanableJob(jobfile)
-			if err != nil {
-				log.Print(errors.Wrapf(err, "failed to parse job file %s", jobfile))
-				continue
-			}
-
-			// if the local_working_directory exists, check for the job file in it. otherwise skip the job.
-			if _, err = os.Open(localJob.LocalWorkingDirectory); err == nil {
-				log.Print(fmt.Sprintf("directory %s exists, skipping job", localJob.LocalWorkingDirectory))
-				continue
-			}
-
-			var runningJobFile *os.File
-			runningJobFilePath := path.Join(localJob.LocalWorkingDirectory, "job")
-			runningJobFile, err = os.Open(runningJobFilePath)
-			if err == nil {
-				runningJobFile.Close()
-
-				// parse the job file in the local_working_directory.
-				var runningJob *RunningJob
-				runningJob, err = NewRunningJob(runningJobFilePath)
-				if err != nil {
-					log.Print(errors.Wrapf(err, "failed to parse %s, skipping job", runningJobFilePath))
-					continue
-				}
-
-				// if the invocation_ids from the job files match, skip the file
-				if runningJob.InvocationID == localJob.InvocationID {
-					log.Printf("running job %s matches cleanable job %s, skipping clean up\n", runningJob.InvocationID, localJob.InvocationID)
-					continue
-				}
-			}
-			defer runningJobFile.Close()
 
 			// generate a jobuuid from the local job file.
 			uuid := tojobuuid(jobfile)
@@ -225,33 +215,57 @@ func main() {
 			// figure out the default network name from the jobuuid
 			netname := tonetworkname(uuid)
 
-			// remove the default network.
-			removableNetworks = append(removableNetworks, netname)
-		}
+			// parse the job file to get the local_working_directory.
+			localJob, err = NewCleanableJob(jobfile)
+			if err != nil {
+				log.Print(errors.Wrapf(err, "failed to parse job file %s", jobfile))
+				continue
+			}
 
-		// Now that the list of removableNetworks is created, get the full list
-		// of networks from docker.
-		networksFromDocker, err = listnetworks(*dockerBin)
-		if err != nil {
-			log.Print(err)
-		}
+			fmt.Println("")
 
-		// Remove the network if it was listed by docker and is one of the
-		// networks no longer being used by a job.
-		for _, dockernet := range networksFromDocker {
-			log.Printf("found docker network %s\n", dockernet)
+			// If the condor working directory doesn't exist, then the job is removable
+			// because the job is no longer running
+			if _, err = os.Open(localJob.LocalWorkingDirectory); err != nil {
+				log.Print(fmt.Sprintf("directory %s does not exist, adding %s to remove", localJob.LocalWorkingDirectory, netname))
+				removableNetworks[netname] = true
+				continue
+			}
 
-			found := false
-			for _, jobnet := range removableNetworks {
-				if dockernet == jobnet {
-					found = true
-					log.Printf("docker network %s is a job network\n", jobnet)
+			// If the job file in the condor working directory exists, we need to make
+			// sure the it's not referring to the same job as the local job file. If
+			// it does, then the job is still running and the network shouldn't be
+			// removed.
+			var runningJobFile *os.File
+			runningJobFilePath := path.Join(localJob.LocalWorkingDirectory, "job")
+			runningJobFile, err = os.Open(runningJobFilePath)
+			if err == nil { // the job file in the condor working dir exists
+				runningJobFile.Close()
+
+				// parse the job file in the local_working_directory.
+				var runningJob *RunningJob
+				runningJob, err = NewRunningJob(runningJobFilePath)
+				if err != nil {
+					log.Print(errors.Wrapf(err, "failed to parse %s, skipping job", runningJobFilePath))
+					removableNetworks[netname] = false
+					continue
+				}
+
+				// if the invocation_ids from the job files match, don't delete the network
+				if runningJob.InvocationID == localJob.InvocationID {
+					log.Printf("running job %s matches cleanable job %s, skipping clean up\n", runningJob.InvocationID, localJob.InvocationID)
+					removableNetworks[netname] = false
+					continue
 				}
 			}
-			// filtering it this way will prevent us from nuking a network
-			// that wasn't created for a job. Useful if the condor node is
-			// performing double duty.
-			if found {
+			defer runningJobFile.Close()
+		}
+
+		// At this point, the state is: if the docker network matches the pattern
+		// and isn't part of a running job, then it should be marked as true in
+		// in the removableNetworks map.
+		for dockernet, isremovable := range removableNetworks {
+			if isremovable {
 				log.Printf("removing docker network %s\n", dockernet)
 				if err = removeNetwork(*dockerBin, dockernet); err != nil {
 					log.Print(err)
