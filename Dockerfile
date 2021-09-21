@@ -1,8 +1,10 @@
-FROM golang:1.8
+FROM golang:1.16-alpine
 
 RUN go get github.com/jstemmer/go-junit-report
 
 COPY . /go/src/github.com/cyverse-de/network-pruner
+WORKDIR /go/src/github.com/cyverse-de/network-pruner
+ENV CGO_ENABLED=0
 RUN go install github.com/cyverse-de/network-pruner
 
 ENTRYPOINT ["network-pruner"]
