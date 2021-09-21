@@ -42,36 +42,9 @@ func tojobuuid(jobfile string) string {
 	return strings.TrimSuffix(path.Base(jobfile), ".json")
 }
 
-// Returns a listing of jobuuids from the image-janitor directory.
-func jobuuids(dir string, fnameregex *regexp.Regexp) ([]string, error) {
-	fpaths, err := jobfiles(dir, fnameregex)
-	if err != nil {
-		return nil, errors.Wrap(err, "error getting list of job files")
-	}
-	var retval []string
-	for _, f := range fpaths {
-		retval = append(retval, tojobuuid(f))
-	}
-	return retval, nil
-}
-
 // convert jobuuid to the default docker network name.
 func tonetworkname(jobuuid string) string {
 	return fmt.Sprintf("%s_default", strings.Replace(jobuuid, "-", "", -1))
-}
-
-// defaultnetworks returns a listing of default docker networks that might be
-// on the box based on the listing of files in the image-janitor directory.
-func defaultnetworks(dir string, fnameregex *regexp.Regexp) ([]string, error) {
-	uuids, err := jobuuids(dir, fnameregex)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get list of job uuids")
-	}
-	var retval []string
-	for _, uuid := range uuids {
-		retval = append(retval, tonetworkname(uuid))
-	}
-	return retval, nil
 }
 
 // listnetworks returns a list of the networks on the host based on the output
@@ -258,7 +231,6 @@ func main() {
 					continue
 				}
 			}
-			defer runningJobFile.Close()
 		}
 
 		// At this point, the state is: if the docker network matches the pattern
