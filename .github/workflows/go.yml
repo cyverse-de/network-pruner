@@ -1,8 +1,9 @@
+name: Release
+
 on:
   push:
     tags:
-      - "*"
-  workflow_dispatch:
+      - v*
 
 jobs:
   tagged-release:
