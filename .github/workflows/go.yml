@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - v*
+      - r*
   workflow_dispatch:
 
 jobs:
@@ -26,6 +26,6 @@ jobs:
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           prerelease: false
-          automatic_release_tag: latest
+          automatic_release_tag: Latest Stable
           files: |
             network-pruner
