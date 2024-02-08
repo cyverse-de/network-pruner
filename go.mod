@@ -1,5 +1,5 @@
 module github.com/cyverse-de/network-pruner
 
-go 1.16
+go 1.21
 
-require github.com/pkg/errors v0.8.1-0.20170505043639-c605e284fe17
+require github.com/pkg/errors v0.9.1
