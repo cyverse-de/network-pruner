@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -20,13 +20,13 @@ import (
 func jobfiles(dir string, fnameregex *regexp.Regexp) ([]string, error) {
 	var retval []string
 
-	entries, err := ioutil.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, entry := range entries {
-		if entry.Mode().IsRegular() {
+		if entry.Type().IsRegular() {
 			if !fnameregex.Match([]byte(entry.Name())) {
 				continue
 			}
@@ -95,7 +95,7 @@ func NewRunningJob(filepath string) (*RunningJob, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to open %s", filepath)
 	}
-	inbytes, err := ioutil.ReadAll(reader)
+	inbytes, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read %s", filepath)
 	}
@@ -120,7 +120,7 @@ func NewCleanableJob(filepath string) (*CleanableJob, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to open %s", filepath)
 	}
-	inbytes, err := ioutil.ReadAll(reader)
+	inbytes, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read %s", filepath)
 	}
@@ -200,7 +200,7 @@ func main() {
 			// If the condor working directory doesn't exist, then the job is removable
 			// because the job is no longer running
 			if _, err = os.Open(localJob.LocalWorkingDirectory); err != nil {
-				log.Print(fmt.Sprintf("directory %s does not exist, adding %s to remove", localJob.LocalWorkingDirectory, netname))
+				log.Printf("directory %s does not exist, adding %s to remove", localJob.LocalWorkingDirectory, netname)
 				removableNetworks[netname] = true
 				continue
 			}
