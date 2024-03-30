@@ -1,7 +1,5 @@
 FROM golang:1.21-alpine
 
-RUN go get github.com/jstemmer/go-junit-report
-
 COPY . /go/src/github.com/cyverse-de/network-pruner
 WORKDIR /go/src/github.com/cyverse-de/network-pruner
 ENV CGO_ENABLED=0
